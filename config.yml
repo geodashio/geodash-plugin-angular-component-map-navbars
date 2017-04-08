@@ -1,0 +1,8 @@
+---
+name: geodash-plugin-angular-component-map-navbars
+components:
+  - GeoDashComponentMapNavbars.ts
+templates:
+  - geodashMapNavbars.tpl.html
+less:
+  - map_navbars.less
