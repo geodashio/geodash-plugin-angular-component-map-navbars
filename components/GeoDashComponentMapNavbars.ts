@@ -3,7 +3,7 @@ declare var geodash: any;
 declare var $: any;
 
 /* Components */
-import { Component, OnInit, EventEmitter, ElementRef } from '@angular/core';
+import { Component, OnInit, EventEmitter, ElementRef, ChangeDetectorRef } from '@angular/core';
 
 /* Services */
 //import { GeoDashServiceBus }  from './../../geodash/services/GeoDashServiceBus';
@@ -32,7 +32,7 @@ export class GeoDashComponentMapNavbars implements OnInit {
 
   name = 'GeoDashComponentMapNavbars';
 
-  constructor(private element: ElementRef, private bus: GeoDashServiceBus, private compileService: GeoDashServiceCompile, private slugify: GeoDashPipeSlugify) {
+  constructor(private element: ElementRef, private changeDetector: ChangeDetectorRef, private bus: GeoDashServiceBus, private compileService: GeoDashServiceCompile, private slugify: GeoDashPipeSlugify) {
     this.default_tab_tooltip_placement =
     {
       "top": "bottom",
@@ -75,48 +75,73 @@ export class GeoDashComponentMapNavbars implements OnInit {
 
   onRefresh = (name: any, data: any, source: any): void => {
     this.state = data["state"];
-    this.refreshNavbars() // sets this.navbars
+    var changed = false;
+    for(var i = 0; i < this.navbars.length; i++)
+    {
+      var before = JSON.stringify(this.navbars[i]);
+      this.navbars[i]['style'] = this.style_navbar(this.navbars[i], this.state);
+      for(var j = 0; j < this.navbars[i]["tabs"].length; j++)
+      {
+        this.navbars[i]["tabs"][j]["title"] = this.interpolate(this.navbars[i]["tabs"][j]["title_template"])(<any>{"state": this.state});
+      }
+      if(before != JSON.stringify(this.navbars[i]))
+      {
+        changed = true;
+      }
+    }
+    if(changed)
+    {
+      this.changeDetector.detectChanges();
+    }
+    //this.refreshNavbars() // sets this.navbars
+    // Can't rebuild, b/c breaks bindings
   }
 
   onClickTab = (event: any, navbar: any, tab: any): void => {
     console.log("tab: ", tab);
-    $('#'+ tab.id).blur();
-    var items = extract("tray.items", tab, []);
-    if(items.length > 0 )
+    if(! (geodash.util.isString(tab.href) && tab.href.length > 0))
     {
-      tab.tray.visible = !tab.tray.visible;
-      tab.tray.opacity = tab.tray.visible ? 1.0 : 0.0 ;
-      if(geodash.util.isDefined(tab.tooltip) && tab.tray.visible) {
-        $('#'+ tab.id).tooltip('hide');
-      }
-    }
-    else
-    {
-      var intents = extract("intents", tab, []);
-      if(geodash.util.isDefined(intents))
+      $('#'+ tab.id).blur();
+      var items = extract("tray.items", tab, []);
+      if(items.length > 0 )
       {
-        intents.forEach((intent:any) => {
-          let data = this.render(intent.data, <any>{"navbar": navbar, "tab": tab});
-          this.bus.emit("intents", intent.name, data, this.name);
-        });
+        tab.tray.visible = !tab.tray.visible;
+        tab.tray.opacity = tab.tray.visible ? 1.0 : 0.0 ;
+        if(geodash.util.isDefined(tab.tooltip) && tab.tray.visible) {
+          $('#'+ tab.id).tooltip('hide');
+        }
       }
+      else
+      {
+        var intents = extract("intents", tab, []);
+        if(geodash.util.isDefined(intents))
+        {
+          intents.forEach((intent:any) => {
+            var intentData = this.render(intent.data, <any>{"navbar": navbar, "tab": tab});
+            this.bus.emit("intents", intent.name, intentData, this.name);
+          });
+        }
+      }
+      event.preventDefault();
     }
-    event.preventDefault();
   }
 
   onClickItem = (event: any, navbar: any, tab: any, item: any): void => {
     console.log("tab: ", tab);
-    // Close Tray
-    tab.tray.visible = false
-    tab.tray.opacity = 0.0;
-    // Process Intents
-    var intents = extract("intents", item, []);
-    if(geodash.util.isDefined(intents))
+    if(! (geodash.util.isString(item.href) && item.href.length > 0))
     {
-      intents.forEach((intent:any) => {
-        let data = this.render(intent.data, <any>{"navbar": navbar, "tab": tab, "item": item});
-        this.bus.emit("intents", intent.name, data, this.name);
-      });
+      // Close Tray
+      tab.tray.visible = false
+      tab.tray.opacity = 0.0;
+      // Process Intents
+      var intents = extract("intents", item, []);
+      if(geodash.util.isDefined(intents))
+      {
+        intents.forEach((intent:any) => {
+          var intentData = this.render(intent.data, <any>{"navbar": navbar, "tab": tab, "item": item});
+          this.bus.emit("intents", intent.name, intentData, this.name);
+        });
+      }
       event.preventDefault();
     }
   }
@@ -135,19 +160,20 @@ export class GeoDashComponentMapNavbars implements OnInit {
   }
 
   refreshNavbars = (): void => {
-
-    this.navbars = extract("navbars", this.dashboard, []).map((navbar: any): any => <any>{
+    var i:number = 0
+    this.navbars = extract("navbars", this.dashboard, []).map((navbar: any): any => geodash.util.extend(navbar, <any>{
+        "id": navbar.id,
         "classes": this.class_navbar(navbar),
-        "style":  this.style_navbar(navbar),
+        "style":  this.style_navbar(navbar, this.state),
         "tabs": extract("tabs", navbar, []).map((tab: any): any => geodash.util.extend(tab, <any>{
-          "id": "geodash-map-navbars-tab-" + this.slugify.transform(tab.value),
+          "id": "geodash-map-navbars-tab-" + navbar.id+"-"+(i++),
           "wrapper_classes":  this.class_tab_wrapper(navbar, tab),
           "wrapper_style":  this.style_tab_wrapper(navbar, tab),
           "classes":  this.class_tab(navbar, tab),
           "style":  this.style_tab(navbar, tab),
           "href":  this.link_url(navbar, tab),
           "target":  this.link_target(navbar, tab),
-          "intents":  this.intents(navbar, tab, undefined),
+          "intents":  this.build_intents(navbar, tab, undefined),
           "tooltip": geodash.util.extend({}, tab.tooltip, <any>{
             "content": extract("tooltip.content", tab),
             "placement": extract(
@@ -158,7 +184,8 @@ export class GeoDashComponentMapNavbars implements OnInit {
             "container": "" // Issue with bootrap 4 tooltips
             //"container": extract("tooltip.container", tab, "body")
           }),
-          "title": tab.title,
+          "title": this.interpolate(tab.title)(<any>{"state": this.state}),
+          "title_template": tab.title,
           "tray": {
             "classes": this.class_tray(navbar, tab),
             "style": this.style_tray(navbar, tab),
@@ -181,11 +208,11 @@ export class GeoDashComponentMapNavbars implements OnInit {
               }),
               "href":  this.link_url_item(navbar, tab, item),
               "target":  this.link_target_item(navbar, tab, item),
-              "intents":  this.intents(navbar, tab, item)
+              "intents":  this.build_intents(navbar, tab, item)
             }))
           }
         }))
-    });
+    }));
 
   }
 
@@ -202,15 +229,6 @@ export class GeoDashComponentMapNavbars implements OnInit {
       str += " geodash-radio-group";
     }
 
-    if(placement == "left" || placement == "right")
-    {
-      str += "";
-    }
-    else // if(placement == "left" || placement == "right")
-    {
-      str += " row no-gutters";
-    }
-
     var classes = extract("css.classes", navbar);
     if(geodash.util.isDefined(classes))
     {
@@ -223,11 +241,18 @@ export class GeoDashComponentMapNavbars implements OnInit {
         str += " " + classes.join(" ");
       }
     }
+    else
+    {
+      if(placement == "top" || placement == "bottom")
+      {
+        str += "flex-row no-gutters"
+      }
+    }
 
     return str;
   }
 
-  style_navbar(navbar: any): any {
+  style_navbar(navbar: any, state: any): any {
     var styleMap = {};
 
     if(geodash.util.isDefined(extract("css.properties", navbar)))
@@ -236,6 +261,18 @@ export class GeoDashComponentMapNavbars implements OnInit {
         extract("css.properties", navbar),
         <any>{'$interpolate': this.interpolate, 'ctx': {'navbar': navbar}}
       ));
+    }
+
+    if(geodash.util.isDefined(state))
+    {
+      if(extract("view.navbars", state, []).indexOf(navbar.id) == -1)
+      {
+        styleMap["display"] = "none";
+      }
+    }
+    else
+    {
+      styleMap["display"] = "none";
     }
 
     return styleMap;
@@ -391,7 +428,7 @@ export class GeoDashComponentMapNavbars implements OnInit {
     }
   }
 
-  intents = (navbar: any, tab: any, item: any): any => {
+  build_intents = (navbar: any, tab: any, item: any): any => {
     var data = [];
     var intents = extract("intents", item) || extract("intents", tab) || extract("intents", navbar);
     if(Array.isArray(intents))
